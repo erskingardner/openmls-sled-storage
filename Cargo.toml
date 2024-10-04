@@ -10,6 +10,7 @@ repository = "https://github.com/erskingardner/openmls-sled-storage"
 homepage = "https://github.com/erskingardner/openmls-sled-storage"
 readme = "README.md"
 keywords = ["openmls", "sled", "storage"]
+exclude = [".github/", "tests/", "Cargo.lock", ".gitignore"]
 
 [features]
 test-utils = ["hex", "openmls_traits/test-utils"] # Enable test utilites
