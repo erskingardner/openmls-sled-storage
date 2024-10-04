@@ -1,0 +1,25 @@
+[package]
+name = "openmls-sled-storage"
+authors = ["White Noise Authors"]
+version = "0.0.1"
+edition = "2021"
+description = "A Sled storage backend for OpenMLS implementing openmls_traits."
+license = "MIT"
+documentation = "https://docs.rs/openmls-sled-storage"
+repository = "https://github.com/erskingardner/openmls-sled-storage"
+readme = "README.md"
+
+[features]
+test-utils = ["hex", "openmls_traits/test-utils"] # Enable test utilites
+
+[dependencies]
+openmls_traits = "0.3"
+sled = "0.34"
+thiserror = "1.0"
+serde_json = "1.0"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+hex = { version = "0.4", features = ["serde"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"
