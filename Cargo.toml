@@ -7,7 +7,9 @@ description = "A Sled storage backend for OpenMLS implementing openmls_traits."
 license = "MIT"
 documentation = "https://docs.rs/openmls-sled-storage"
 repository = "https://github.com/erskingardner/openmls-sled-storage"
+homepage = "https://github.com/erskingardner/openmls-sled-storage"
 readme = "README.md"
+keywords = ["openmls", "sled", "storage"]
 
 [features]
 test-utils = ["hex", "openmls_traits/test-utils"] # Enable test utilites
