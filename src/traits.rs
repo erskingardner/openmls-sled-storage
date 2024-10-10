@@ -25,9 +25,8 @@ const EPOCH_SECRETS_TREE: &[u8] = b"EpochSecrets";
 const RESUMPTION_PSK_STORE_TREE: &[u8] = b"ResumptionPsk";
 const MESSAGE_SECRETS_TREE: &[u8] = b"MessageSecrets";
 
-// TODO: Future helper for removing all stored MLS state
-#[allow(dead_code)]
-const TREES: [&[u8]; 18] = [
+/// Helper for removing all stored MLS state
+pub const TREES: [&[u8]; 18] = [
     KEY_PACKAGE_TREE,
     PSK_TREE,
     ENCRYPTION_KEY_PAIR_TREE,
@@ -74,72 +73,21 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         Ok(())
     }
 
-    fn write_tree<
+    fn remove_proposal<
         GroupId: traits::GroupId<CURRENT_VERSION>,
-        TreeSync: traits::TreeSync<CURRENT_VERSION>,
+        ProposalRef: traits::ProposalRef<CURRENT_VERSION>,
     >(
         &self,
         group_id: &GroupId,
-        tree: &TreeSync,
+        proposal_ref: &ProposalRef,
     ) -> Result<(), Self::Error> {
-        self.write::<CURRENT_VERSION>(
-            RATCHET_TREE_TREE,
-            &serde_json::to_vec(&group_id).unwrap(),
-            serde_json::to_vec(&tree).unwrap(),
-        )
-    }
+        let key = serde_json::to_vec(group_id)?;
+        let value = serde_json::to_vec(proposal_ref)?;
 
-    fn write_interim_transcript_hash<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        InterimTranscriptHash: traits::InterimTranscriptHash<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-        interim_transcript_hash: &InterimTranscriptHash,
-    ) -> Result<(), Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(INTERIM_TRANSCRIPT_HASH_TREE, group_id);
-        let value = serde_json::to_vec(&interim_transcript_hash).unwrap();
-        self.write::<CURRENT_VERSION>(INTERIM_TRANSCRIPT_HASH_TREE, &key, value)
-    }
+        self.remove_item::<CURRENT_VERSION>(PROPOSAL_QUEUE_REFS_TREE, &key, value)?;
 
-    fn write_context<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        GroupContext: traits::GroupContext<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-        group_context: &GroupContext,
-    ) -> Result<(), Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(GROUP_CONTEXT_TREE, group_id);
-        let value = serde_json::to_vec(&group_context).unwrap();
-        self.write::<CURRENT_VERSION>(GROUP_CONTEXT_TREE, &key, value)
-    }
-
-    fn write_confirmation_tag<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        ConfirmationTag: traits::ConfirmationTag<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-        confirmation_tag: &ConfirmationTag,
-    ) -> Result<(), Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(CONFIRMATION_TAG_TREE, group_id);
-        let value = serde_json::to_vec(&confirmation_tag).unwrap();
-        self.write::<CURRENT_VERSION>(CONFIRMATION_TAG_TREE, &key, value)
-    }
-
-    fn write_signature_key_pair<
-        SignaturePublicKey: traits::SignaturePublicKey<CURRENT_VERSION>,
-        SignatureKeyPair: traits::SignatureKeyPair<CURRENT_VERSION>,
-    >(
-        &self,
-        public_key: &SignaturePublicKey,
-        signature_key_pair: &SignatureKeyPair,
-    ) -> Result<(), Self::Error> {
-        let key =
-            build_key::<CURRENT_VERSION, &SignaturePublicKey>(SIGNATURE_KEY_PAIR_TREE, public_key);
-        let value = serde_json::to_vec(&signature_key_pair).unwrap();
-        self.write::<CURRENT_VERSION>(SIGNATURE_KEY_PAIR_TREE, &key, value)
+        let key = serde_json::to_vec(&(group_id, proposal_ref))?;
+        self.delete::<CURRENT_VERSION>(QUEUED_PROPOSAL_TREE, &key)
     }
 
     fn queued_proposal_refs<
@@ -168,10 +116,32 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
                 let key = (group_id, &proposal_ref);
                 let key = serde_json::to_vec(&key)?;
 
-                let proposal = self.read(QUEUED_PROPOSAL_TREE, &key)?.unwrap();
+                let proposal = self
+                    .read::<CURRENT_VERSION, _>(QUEUED_PROPOSAL_TREE, &key)?
+                    .unwrap();
                 Ok((proposal_ref, proposal))
             })
             .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn clear_proposal_queue<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        ProposalRef: traits::ProposalRef<CURRENT_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        // Get all proposal refs for this group.
+        let proposal_refs: Vec<ProposalRef> =
+            self.read_list(PROPOSAL_QUEUE_REFS_TREE, &serde_json::to_vec(group_id)?)?;
+        for proposal_ref in proposal_refs {
+            // Delete all proposals.
+            self.remove_proposal(group_id, &proposal_ref)?;
+        }
+
+        // Delete the proposal refs from the store.
+        let key = build_key::<CURRENT_VERSION, &GroupId>(PROPOSAL_QUEUE_REFS_TREE, group_id);
+        self.delete::<CURRENT_VERSION>(PROPOSAL_QUEUE_REFS_TREE, &key)
     }
 
     fn tree<
@@ -181,19 +151,29 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<TreeSync>, Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(RATCHET_TREE_TREE, group_id);
-        self.read::<CURRENT_VERSION, TreeSync>(RATCHET_TREE_TREE, &key)
+        self.read::<CURRENT_VERSION, TreeSync>(RATCHET_TREE_TREE, &serde_json::to_vec(group_id)?)
     }
 
-    fn group_context<
+    fn write_tree<
         GroupId: traits::GroupId<CURRENT_VERSION>,
-        GroupContext: traits::GroupContext<CURRENT_VERSION>,
+        TreeSync: traits::TreeSync<CURRENT_VERSION>,
     >(
         &self,
         group_id: &GroupId,
-    ) -> Result<Option<GroupContext>, Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(GROUP_CONTEXT_TREE, group_id);
-        self.read::<CURRENT_VERSION, GroupContext>(GROUP_CONTEXT_TREE, &key)
+        tree: &TreeSync,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            RATCHET_TREE_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(tree)?,
+        )
+    }
+
+    fn delete_tree<GroupId: traits::GroupId<CURRENT_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(RATCHET_TREE_TREE, &serde_json::to_vec(group_id)?)
     }
 
     fn interim_transcript_hash<
@@ -203,141 +183,67 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<InterimTranscriptHash>, Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(INTERIM_TRANSCRIPT_HASH_TREE, group_id);
-        self.read::<CURRENT_VERSION, InterimTranscriptHash>(INTERIM_TRANSCRIPT_HASH_TREE, &key)
+        self.read::<CURRENT_VERSION, InterimTranscriptHash>(
+            INTERIM_TRANSCRIPT_HASH_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
-    fn confirmation_tag<
+    fn write_interim_transcript_hash<
         GroupId: traits::GroupId<CURRENT_VERSION>,
-        ConfirmationTag: traits::ConfirmationTag<CURRENT_VERSION>,
+        InterimTranscriptHash: traits::InterimTranscriptHash<CURRENT_VERSION>,
     >(
         &self,
         group_id: &GroupId,
-    ) -> Result<Option<ConfirmationTag>, Self::Error> {
-        let key = build_key::<CURRENT_VERSION, &GroupId>(CONFIRMATION_TAG_TREE, group_id);
-        self.read::<CURRENT_VERSION, ConfirmationTag>(CONFIRMATION_TAG_TREE, &key)
-    }
-
-    fn signature_key_pair<
-        SignaturePublicKey: traits::SignaturePublicKey<CURRENT_VERSION>,
-        SignatureKeyPair: traits::SignatureKeyPair<CURRENT_VERSION>,
-    >(
-        &self,
-        public_key: &SignaturePublicKey,
-    ) -> Result<Option<SignatureKeyPair>, Self::Error> {
-        let key =
-            build_key::<CURRENT_VERSION, &SignaturePublicKey>(SIGNATURE_KEY_PAIR_TREE, public_key);
-        self.read::<CURRENT_VERSION, SignatureKeyPair>(SIGNATURE_KEY_PAIR_TREE, &key)
-    }
-
-    fn write_key_package<
-        HashReference: traits::HashReference<CURRENT_VERSION>,
-        KeyPackage: traits::KeyPackage<CURRENT_VERSION>,
-    >(
-        &self,
-        hash_ref: &HashReference,
-        key_package: &KeyPackage,
-    ) -> Result<(), Self::Error> {
-        let key = serde_json::to_vec(&hash_ref).unwrap();
-        let value = serde_json::to_vec(&key_package).unwrap();
-        self.write::<CURRENT_VERSION>(KEY_PACKAGE_TREE, &key, value)
-    }
-
-    fn write_psk<
-        PskId: traits::PskId<CURRENT_VERSION>,
-        PskBundle: traits::PskBundle<CURRENT_VERSION>,
-    >(
-        &self,
-        psk_id: &PskId,
-        psk: &PskBundle,
+        interim_transcript_hash: &InterimTranscriptHash,
     ) -> Result<(), Self::Error> {
         self.write::<CURRENT_VERSION>(
-            PSK_TREE,
-            &serde_json::to_vec(&psk_id).unwrap(),
-            serde_json::to_vec(&psk).unwrap(),
+            INTERIM_TRANSCRIPT_HASH_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(&interim_transcript_hash)?,
         )
     }
 
-    fn write_encryption_key_pair<
-        EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>,
-        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
+    fn delete_interim_transcript_hash<GroupId: traits::GroupId<CURRENT_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(INTERIM_TRANSCRIPT_HASH_TREE, &serde_json::to_vec(group_id)?)
+    }
+
+    fn group_context<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        GroupContext: traits::GroupContext<CURRENT_VERSION>,
     >(
         &self,
-        public_key: &EncryptionKey,
-        key_pair: &HpkeKeyPair,
+        group_id: &GroupId,
+    ) -> Result<Option<GroupContext>, Self::Error> {
+        self.read::<CURRENT_VERSION, GroupContext>(
+            GROUP_CONTEXT_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
+    }
+
+    fn write_context<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        GroupContext: traits::GroupContext<CURRENT_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        group_context: &GroupContext,
     ) -> Result<(), Self::Error> {
         self.write::<CURRENT_VERSION>(
-            ENCRYPTION_KEY_PAIR_TREE,
-            &serde_json::to_vec(public_key).unwrap(),
-            serde_json::to_vec(key_pair).unwrap(),
+            GROUP_CONTEXT_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(&group_context)?,
         )
     }
 
-    fn key_package<
-        KeyPackageRef: traits::HashReference<CURRENT_VERSION>,
-        KeyPackage: traits::KeyPackage<CURRENT_VERSION>,
-    >(
+    fn delete_context<GroupId: traits::GroupId<CURRENT_VERSION>>(
         &self,
-        hash_ref: &KeyPackageRef,
-    ) -> Result<Option<KeyPackage>, Self::Error> {
-        let key = serde_json::to_vec(&hash_ref).unwrap();
-        self.read(KEY_PACKAGE_TREE, &key)
-    }
-
-    fn psk<PskBundle: traits::PskBundle<CURRENT_VERSION>, PskId: traits::PskId<CURRENT_VERSION>>(
-        &self,
-        psk_id: &PskId,
-    ) -> Result<Option<PskBundle>, Self::Error> {
-        self.read(PSK_TREE, &serde_json::to_vec(&psk_id).unwrap())
-    }
-
-    fn encryption_key_pair<
-        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
-        EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>,
-    >(
-        &self,
-        public_key: &EncryptionKey,
-    ) -> Result<Option<HpkeKeyPair>, Self::Error> {
-        self.read(
-            ENCRYPTION_KEY_PAIR_TREE,
-            &serde_json::to_vec(public_key).unwrap(),
-        )
-    }
-
-    fn delete_signature_key_pair<
-        SignaturePublicKeuy: traits::SignaturePublicKey<CURRENT_VERSION>,
-    >(
-        &self,
-        public_key: &SignaturePublicKeuy,
+        group_id: &GroupId,
     ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(
-            SIGNATURE_KEY_PAIR_TREE,
-            &serde_json::to_vec(public_key).unwrap(),
-        )
-    }
-
-    fn delete_encryption_key_pair<EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>>(
-        &self,
-        public_key: &EncryptionKey,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(
-            ENCRYPTION_KEY_PAIR_TREE,
-            &serde_json::to_vec(&public_key).unwrap(),
-        )
-    }
-
-    fn delete_key_package<KeyPackageRef: traits::HashReference<CURRENT_VERSION>>(
-        &self,
-        hash_ref: &KeyPackageRef,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(KEY_PACKAGE_TREE, &serde_json::to_vec(&hash_ref)?)
-    }
-
-    fn delete_psk<PskKey: traits::PskId<CURRENT_VERSION>>(
-        &self,
-        psk_id: &PskKey,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(PSK_TREE, &serde_json::to_vec(&psk_id)?)
+        self.delete::<CURRENT_VERSION>(GROUP_CONTEXT_TREE, &serde_json::to_vec(group_id)?)
     }
 
     fn group_state<
@@ -347,7 +253,7 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<GroupState>, Self::Error> {
-        self.read(GROUP_STATE_TREE, &serde_json::to_vec(&group_id)?)
+        self.read::<CURRENT_VERSION, GroupState>(GROUP_STATE_TREE, &serde_json::to_vec(&group_id)?)
     }
 
     fn write_group_state<
@@ -372,6 +278,174 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         self.delete::<CURRENT_VERSION>(GROUP_STATE_TREE, &serde_json::to_vec(group_id)?)
     }
 
+    fn confirmation_tag<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        ConfirmationTag: traits::ConfirmationTag<CURRENT_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<Option<ConfirmationTag>, Self::Error> {
+        self.read::<CURRENT_VERSION, ConfirmationTag>(
+            CONFIRMATION_TAG_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
+    }
+
+    fn write_confirmation_tag<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        ConfirmationTag: traits::ConfirmationTag<CURRENT_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        confirmation_tag: &ConfirmationTag,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            CONFIRMATION_TAG_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(confirmation_tag)?,
+        )
+    }
+
+    fn delete_confirmation_tag<GroupId: traits::GroupId<CURRENT_VERSION>>(
+        &self,
+        group_id: &GroupId,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(CONFIRMATION_TAG_TREE, &serde_json::to_vec(group_id)?)
+    }
+
+    fn signature_key_pair<
+        SignaturePublicKey: traits::SignaturePublicKey<CURRENT_VERSION>,
+        SignatureKeyPair: traits::SignatureKeyPair<CURRENT_VERSION>,
+    >(
+        &self,
+        public_key: &SignaturePublicKey,
+    ) -> Result<Option<SignatureKeyPair>, Self::Error> {
+        self.read::<CURRENT_VERSION, SignatureKeyPair>(
+            SIGNATURE_KEY_PAIR_TREE,
+            &serde_json::to_vec(public_key)?,
+        )
+    }
+
+    fn write_signature_key_pair<
+        SignaturePublicKey: traits::SignaturePublicKey<CURRENT_VERSION>,
+        SignatureKeyPair: traits::SignatureKeyPair<CURRENT_VERSION>,
+    >(
+        &self,
+        public_key: &SignaturePublicKey,
+        signature_key_pair: &SignatureKeyPair,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            SIGNATURE_KEY_PAIR_TREE,
+            &serde_json::to_vec(public_key)?,
+            serde_json::to_vec(signature_key_pair)?,
+        )
+    }
+
+    fn delete_signature_key_pair<
+        SignaturePublicKeuy: traits::SignaturePublicKey<CURRENT_VERSION>,
+    >(
+        &self,
+        public_key: &SignaturePublicKeuy,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(SIGNATURE_KEY_PAIR_TREE, &serde_json::to_vec(public_key)?)
+    }
+
+    fn encryption_key_pair<
+        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
+        EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>,
+    >(
+        &self,
+        public_key: &EncryptionKey,
+    ) -> Result<Option<HpkeKeyPair>, Self::Error> {
+        self.read::<CURRENT_VERSION, HpkeKeyPair>(
+            ENCRYPTION_KEY_PAIR_TREE,
+            &serde_json::to_vec(public_key)?,
+        )
+    }
+
+    fn write_encryption_key_pair<
+        EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>,
+        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
+    >(
+        &self,
+        public_key: &EncryptionKey,
+        key_pair: &HpkeKeyPair,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            ENCRYPTION_KEY_PAIR_TREE,
+            &serde_json::to_vec(public_key)?,
+            serde_json::to_vec(key_pair)?,
+        )
+    }
+
+    fn delete_encryption_key_pair<EncryptionKey: traits::EncryptionKey<CURRENT_VERSION>>(
+        &self,
+        public_key: &EncryptionKey,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(ENCRYPTION_KEY_PAIR_TREE, &serde_json::to_vec(&public_key)?)
+    }
+
+    fn key_package<
+        KeyPackageRef: traits::HashReference<CURRENT_VERSION>,
+        KeyPackage: traits::KeyPackage<CURRENT_VERSION>,
+    >(
+        &self,
+        hash_ref: &KeyPackageRef,
+    ) -> Result<Option<KeyPackage>, Self::Error> {
+        self.read::<CURRENT_VERSION, KeyPackage>(KEY_PACKAGE_TREE, &serde_json::to_vec(&hash_ref)?)
+    }
+
+    fn write_key_package<
+        HashReference: traits::HashReference<CURRENT_VERSION>,
+        KeyPackage: traits::KeyPackage<CURRENT_VERSION>,
+    >(
+        &self,
+        hash_ref: &HashReference,
+        key_package: &KeyPackage,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            KEY_PACKAGE_TREE,
+            &serde_json::to_vec(&hash_ref)?,
+            serde_json::to_vec(&key_package)?,
+        )
+    }
+
+    fn delete_key_package<KeyPackageRef: traits::HashReference<CURRENT_VERSION>>(
+        &self,
+        hash_ref: &KeyPackageRef,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(KEY_PACKAGE_TREE, &serde_json::to_vec(&hash_ref)?)
+    }
+
+    fn psk<PskBundle: traits::PskBundle<CURRENT_VERSION>, PskId: traits::PskId<CURRENT_VERSION>>(
+        &self,
+        psk_id: &PskId,
+    ) -> Result<Option<PskBundle>, Self::Error> {
+        self.read::<CURRENT_VERSION, PskBundle>(PSK_TREE, &serde_json::to_vec(&psk_id)?)
+    }
+
+    fn write_psk<
+        PskId: traits::PskId<CURRENT_VERSION>,
+        PskBundle: traits::PskBundle<CURRENT_VERSION>,
+    >(
+        &self,
+        psk_id: &PskId,
+        psk: &PskBundle,
+    ) -> Result<(), Self::Error> {
+        self.write::<CURRENT_VERSION>(
+            PSK_TREE,
+            &serde_json::to_vec(&psk_id)?,
+            serde_json::to_vec(&psk)?,
+        )
+    }
+
+    fn delete_psk<PskKey: traits::PskId<CURRENT_VERSION>>(
+        &self,
+        psk_id: &PskKey,
+    ) -> Result<(), Self::Error> {
+        self.delete::<CURRENT_VERSION>(PSK_TREE, &serde_json::to_vec(&psk_id)?)
+    }
+
     fn message_secrets<
         GroupId: traits::GroupId<CURRENT_VERSION>,
         MessageSecrets: traits::MessageSecrets<CURRENT_VERSION>,
@@ -379,7 +453,10 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<MessageSecrets>, Self::Error> {
-        self.read(MESSAGE_SECRETS_TREE, &serde_json::to_vec(group_id)?)
+        self.read::<CURRENT_VERSION, MessageSecrets>(
+            MESSAGE_SECRETS_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
     fn write_message_secrets<
@@ -411,7 +488,10 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<ResumptionPskStore>, Self::Error> {
-        self.read(RESUMPTION_PSK_STORE_TREE, &serde_json::to_vec(group_id)?)
+        self.read::<CURRENT_VERSION, ResumptionPskStore>(
+            RESUMPTION_PSK_STORE_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
     fn write_resumption_psk_store<
@@ -443,7 +523,10 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<LeafNodeIndex>, Self::Error> {
-        self.read(OWN_LEAF_NODE_INDEX_TREE, &serde_json::to_vec(group_id)?)
+        self.read::<CURRENT_VERSION, LeafNodeIndex>(
+            OWN_LEAF_NODE_INDEX_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
     fn write_own_leaf_index<
@@ -475,7 +558,10 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<GroupEpochSecrets>, Self::Error> {
-        self.read(EPOCH_SECRETS_TREE, &serde_json::to_vec(group_id)?)
+        self.read::<CURRENT_VERSION, GroupEpochSecrets>(
+            EPOCH_SECRETS_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
     fn write_group_epoch_secrets<
@@ -500,6 +586,20 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         self.delete::<CURRENT_VERSION>(EPOCH_SECRETS_TREE, &serde_json::to_vec(group_id)?)
     }
 
+    fn encryption_epoch_key_pairs<
+        GroupId: traits::GroupId<CURRENT_VERSION>,
+        EpochKey: traits::EpochKey<CURRENT_VERSION>,
+        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
+    >(
+        &self,
+        group_id: &GroupId,
+        epoch: &EpochKey,
+        leaf_index: u32,
+    ) -> Result<Vec<HpkeKeyPair>, Self::Error> {
+        let key = epoch_key_pairs_id(group_id, epoch, leaf_index)?;
+        self.read_list::<CURRENT_VERSION, HpkeKeyPair>(EPOCH_KEY_PAIRS_TREE, &key)
+    }
+
     fn write_encryption_epoch_key_pairs<
         GroupId: traits::GroupId<CURRENT_VERSION>,
         EpochKey: traits::EpochKey<CURRENT_VERSION>,
@@ -512,43 +612,7 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         key_pairs: &[HpkeKeyPair],
     ) -> Result<(), Self::Error> {
         let key = epoch_key_pairs_id(group_id, epoch, leaf_index)?;
-        let value = serde_json::to_vec(key_pairs)?;
-        log::debug!("Writing encryption epoch key pairs");
-        #[cfg(feature = "test-utils")]
-        {
-            log::debug!("  key: {}", hex::encode(&key));
-            log::debug!("  value: {}", hex::encode(&value));
-        }
-
-        self.write::<CURRENT_VERSION>(EPOCH_KEY_PAIRS_TREE, &key, value)
-    }
-
-    fn encryption_epoch_key_pairs<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        EpochKey: traits::EpochKey<CURRENT_VERSION>,
-        HpkeKeyPair: traits::HpkeKeyPair<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-        epoch: &EpochKey,
-        leaf_index: u32,
-    ) -> Result<Vec<HpkeKeyPair>, Self::Error> {
-        let key = epoch_key_pairs_id(group_id, epoch, leaf_index)?;
-        let storage_key = build_key_from_vec::<CURRENT_VERSION>(EPOCH_KEY_PAIRS_TREE, key);
-        log::debug!("Reading encryption epoch key pairs");
-
-        let value = self.db.get(&storage_key)?;
-
-        #[cfg(feature = "test-utils")]
-        log::debug!("  key: {}", hex::encode(&storage_key));
-
-        if let Some(value) = value.as_ref() {
-            #[cfg(feature = "test-utils")]
-            log::debug!("  value: {}", hex::encode(value));
-            return Ok(serde_json::from_slice(value).unwrap());
-        }
-
-        Err(SledStorageError::None)
+        self.write::<CURRENT_VERSION>(EPOCH_KEY_PAIRS_TREE, &key, serde_json::to_vec(key_pairs)?)
     }
 
     fn delete_encryption_epoch_key_pairs<
@@ -564,26 +628,6 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         self.delete::<CURRENT_VERSION>(EPOCH_KEY_PAIRS_TREE, &key)
     }
 
-    fn clear_proposal_queue<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        ProposalRef: traits::ProposalRef<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        // Get all proposal refs for this group.
-        let proposal_refs: Vec<ProposalRef> =
-            self.read_list(PROPOSAL_QUEUE_REFS_TREE, &serde_json::to_vec(group_id)?)?;
-        for proposal_ref in proposal_refs {
-            // Delete all proposals.
-            self.remove_proposal(group_id, &proposal_ref)?;
-        }
-
-        // Delete the proposal refs from the store.
-        let key = build_key::<CURRENT_VERSION, &GroupId>(PROPOSAL_QUEUE_REFS_TREE, group_id);
-        self.delete::<CURRENT_VERSION>(PROPOSAL_QUEUE_REFS_TREE, &key)
-    }
-
     fn mls_group_join_config<
         GroupId: traits::GroupId<CURRENT_VERSION>,
         MlsGroupJoinConfig: traits::MlsGroupJoinConfig<CURRENT_VERSION>,
@@ -591,7 +635,10 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Option<MlsGroupJoinConfig>, Self::Error> {
-        self.read(JOIN_CONFIG_TREE, &serde_json::to_vec(group_id).unwrap())
+        self.read::<CURRENT_VERSION, MlsGroupJoinConfig>(
+            JOIN_CONFIG_TREE,
+            &serde_json::to_vec(group_id)?,
+        )
     }
 
     fn write_mls_join_config<
@@ -602,10 +649,11 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         group_id: &GroupId,
         config: &MlsGroupJoinConfig,
     ) -> Result<(), Self::Error> {
-        let key = serde_json::to_vec(group_id).unwrap();
-        let value = serde_json::to_vec(config).unwrap();
-
-        self.write::<CURRENT_VERSION>(JOIN_CONFIG_TREE, &key, value)
+        self.write::<CURRENT_VERSION>(
+            JOIN_CONFIG_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(config)?,
+        )
     }
 
     fn own_leaf_nodes<
@@ -615,7 +663,7 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         &self,
         group_id: &GroupId,
     ) -> Result<Vec<LeafNode>, Self::Error> {
-        self.read_list(OWN_LEAF_NODES_TREE, &serde_json::to_vec(group_id).unwrap())
+        self.read_list(OWN_LEAF_NODES_TREE, &serde_json::to_vec(group_id)?)
     }
 
     fn append_own_leaf_node<
@@ -626,73 +674,24 @@ impl StorageProvider<CURRENT_VERSION> for SledStorage {
         group_id: &GroupId,
         leaf_node: &LeafNode,
     ) -> Result<(), Self::Error> {
-        let key = serde_json::to_vec(group_id)?;
-        let value = serde_json::to_vec(leaf_node)?;
-        self.append::<CURRENT_VERSION>(OWN_LEAF_NODES_TREE, &key, value)
+        self.append::<CURRENT_VERSION>(
+            OWN_LEAF_NODES_TREE,
+            &serde_json::to_vec(group_id)?,
+            serde_json::to_vec(leaf_node)?,
+        )
     }
 
     fn delete_own_leaf_nodes<GroupId: traits::GroupId<CURRENT_VERSION>>(
         &self,
         group_id: &GroupId,
     ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(OWN_LEAF_NODES_TREE, &serde_json::to_vec(group_id).unwrap())
+        self.delete::<CURRENT_VERSION>(OWN_LEAF_NODES_TREE, &serde_json::to_vec(group_id)?)
     }
 
     fn delete_group_config<GroupId: traits::GroupId<CURRENT_VERSION>>(
         &self,
         group_id: &GroupId,
     ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(JOIN_CONFIG_TREE, &serde_json::to_vec(group_id).unwrap())
-    }
-
-    fn delete_tree<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(RATCHET_TREE_TREE, &serde_json::to_vec(group_id).unwrap())
-    }
-
-    fn delete_confirmation_tag<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(
-            CONFIRMATION_TAG_TREE,
-            &serde_json::to_vec(group_id).unwrap(),
-        )
-    }
-
-    fn delete_context<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(GROUP_CONTEXT_TREE, &serde_json::to_vec(group_id).unwrap())
-    }
-
-    fn delete_interim_transcript_hash<GroupId: traits::GroupId<CURRENT_VERSION>>(
-        &self,
-        group_id: &GroupId,
-    ) -> Result<(), Self::Error> {
-        self.delete::<CURRENT_VERSION>(
-            INTERIM_TRANSCRIPT_HASH_TREE,
-            &serde_json::to_vec(group_id).unwrap(),
-        )
-    }
-
-    fn remove_proposal<
-        GroupId: traits::GroupId<CURRENT_VERSION>,
-        ProposalRef: traits::ProposalRef<CURRENT_VERSION>,
-    >(
-        &self,
-        group_id: &GroupId,
-        proposal_ref: &ProposalRef,
-    ) -> Result<(), Self::Error> {
-        let key = serde_json::to_vec(group_id).unwrap();
-        let value = serde_json::to_vec(proposal_ref).unwrap();
-
-        self.remove_item::<CURRENT_VERSION>(PROPOSAL_QUEUE_REFS_TREE, &key, value)?;
-
-        let key = serde_json::to_vec(&(group_id, proposal_ref)).unwrap();
-        self.delete::<CURRENT_VERSION>(QUEUED_PROPOSAL_TREE, &key)
+        self.delete::<CURRENT_VERSION>(JOIN_CONFIG_TREE, &serde_json::to_vec(group_id)?)
     }
 }

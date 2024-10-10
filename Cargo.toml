@@ -12,17 +12,14 @@ readme = "README.md"
 keywords = ["openmls", "sled", "storage"]
 exclude = [".github/", "tests/", "Cargo.lock", ".gitignore"]
 
-[features]
-test-utils = ["hex", "openmls_traits/test-utils"] # Enable test utilites
-
 [dependencies]
-openmls_traits = "0.3"
+openmls_traits = { version = "0.3", path = "../openmls/traits" }
 sled = "0.34"
 thiserror = "1.0"
 serde_json = "1.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
-hex = { version = "0.4", features = ["serde"], optional = true }
+hex = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.8"

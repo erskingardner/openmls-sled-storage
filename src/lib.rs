@@ -1,9 +1,11 @@
 pub mod helpers;
 pub mod traits;
 
+use crate::traits::TREES;
 use openmls_traits::storage::*;
 use sled::Db;
 use std::path::Path;
+use std::time::Instant;
 
 pub struct SledStorage {
     db: Db,
@@ -53,6 +55,39 @@ impl SledStorage {
         Ok(Self { db })
     }
 
+    /// Deletes all data from the storage.
+    ///
+    /// This method clears all trees defined in the `TREES` constant,
+    /// as well as the main database.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success (`Ok(())`) or a `SledStorageError` if an error occurred.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// - There's an issue opening any of the trees
+    /// - There's an issue clearing any of the trees or the main database
+    pub fn delete_all_data(&self) -> Result<(), SledStorageError> {
+        let start = Instant::now();
+        log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleting all data");
+        for tree in TREES {
+            let tree_name_string = String::from_utf8(tree.to_vec()).unwrap();
+            log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleting tree: {:#?}", tree_name_string);
+            match tree_name_string.as_str() {
+                "__sled__default" => (),
+                _ => {
+                    self.db.drop_tree(tree)?;
+                }
+            }
+        }
+        self.db.clear()?;
+        self.db.flush()?;
+        log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleted all data in {:?}", start.elapsed());
+        Ok(())
+    }
+
     /// Writes a value to the storage with the given tree and key.
     ///
     /// # Arguments
@@ -68,6 +103,7 @@ impl SledStorage {
     /// # Returns
     ///
     /// A Result indicating success or a SledStorageError.
+    #[inline(always)]
     fn write<const VERSION: u16>(
         &self,
         tree: &[u8],
@@ -76,8 +112,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Writing to key: {:?} in tree: {:?}", hex::encode(&key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Writing to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         // Serialize the value before storing
         let serialized_value =
@@ -112,8 +147,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Appending to key: {:?} in tree: {:?}", hex::encode(&key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Appending to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         let list_bytes = active_tree.get(key)?;
         let mut list: Vec<Vec<u8>> = Vec::new();
@@ -148,6 +182,7 @@ impl SledStorage {
     /// # Returns
     ///
     /// A `Result` containing an `Option` with the value (if found) or a `SledStorageError`.
+    #[inline(always)]
     fn read<const VERSION: u16, V: Entity<VERSION>>(
         &self,
         tree: &[u8],
@@ -155,8 +190,7 @@ impl SledStorage {
     ) -> Result<Option<V>, <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Reading key: {:?} in tree: {:?}", hex::encode(&key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Reading key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         match active_tree.get(key) {
             Ok(None) => Ok(None),
@@ -183,6 +217,7 @@ impl SledStorage {
     /// # Returns
     ///
     /// A Result containing a Vec of entities or a SledStorageError.
+    #[inline(always)]
     fn read_list<const VERSION: u16, V: Entity<VERSION>>(
         &self,
         tree: &[u8],
@@ -190,8 +225,7 @@ impl SledStorage {
     ) -> Result<Vec<V>, <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Reading list from key: {:?} in tree: {:?}", hex::encode(&key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Reading list from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         let value: Vec<Vec<u8>> = match active_tree.get(key) {
             Ok(Some(list_bytes)) => serde_json::from_slice(&list_bytes).unwrap(),
@@ -229,8 +263,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Removing item from key: {:?} in tree: {:?}", hex::encode(&key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Removing item from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         // fetch value from db, falling back to an empty list if doens't exist
         let list = match active_tree.get(key) {
@@ -272,6 +305,7 @@ impl SledStorage {
     /// # Returns
     ///
     /// A Result indicating success or a SledStorageError.
+    #[inline(always)]
     fn delete<const VERSION: u16>(
         &self,
         tree: &[u8],
@@ -279,8 +313,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        #[cfg(feature = "test-utils")]
-        log::debug!(target: "openmls-sled-storage", "Deleting key: {:?} in tree: {:?}", hex::encode(&storage_key), hex::encode(&tree));
+        log::debug!(target: "openmls-sled-storage", "Deleting key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         match active_tree.remove(key) {
             Ok(_res) => Ok(()),
