@@ -228,7 +228,7 @@ impl SledStorage {
         log::debug!(target: "openmls-sled-storage", "Reading list from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         let value: Vec<Vec<u8>> = match active_tree.get(key) {
-            Ok(Some(list_bytes)) => serde_json::from_slice(&list_bytes).unwrap(),
+            Ok(Some(list_bytes)) => serde_json::from_slice(&list_bytes)?,
             Ok(None) => vec![],
             Err(e) => return Err(SledStorageError::SledError(e)),
         };
