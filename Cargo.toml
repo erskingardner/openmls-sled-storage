@@ -13,7 +13,7 @@ keywords = ["openmls", "sled", "storage"]
 exclude = [".github/", "tests/", "Cargo.lock", ".gitignore"]
 
 [dependencies]
-openmls_traits = { version = "0.3", path = "../openmls/traits" }
+openmls_traits = "0.3"
 sled = "0.34"
 thiserror = "1.0"
 serde_json = "1.0"

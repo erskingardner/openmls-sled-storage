@@ -175,6 +175,8 @@ dependencies = [
 [[package]]
 name = "openmls_traits"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "443afa05406adc75fbfa0c3e04db93c5647b763861a474ae1aa8a99c362b80f8"
 dependencies = [
  "serde",
  "tls_codec",
