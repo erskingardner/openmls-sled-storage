@@ -55,6 +55,24 @@ impl SledStorage {
         Ok(Self { db })
     }
 
+    /// Flushes the database, ensuring all pending writes are persisted to disk.
+    ///
+    /// This method calls the underlying Sled database's flush operation, which
+    /// synchronizes all modified data to stable storage.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success (`Ok(())`) or a `SledStorageError` if the flush operation fails.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the underlying Sled database encounters
+    /// an issue during the flush operation.
+    pub fn flush(&self) -> Result<(), SledStorageError> {
+        self.db.flush()?;
+        Ok(())
+    }
+
     /// Deletes all data from the storage.
     ///
     /// This method clears all trees defined in the `TREES` constant,
