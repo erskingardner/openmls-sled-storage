@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "openmls_traits"
 version = "0.3.0"
-source = "git+https://github.com/openmls/openmls#a7536aa?branch=main#a7536aa4d1f5f09c0311ed550f509a4e06d54428"
+source = "git+https://github.com/openmls/openmls?rev=a7536aa#a7536aa4d1f5f09c0311ed550f509a4e06d54428"
 dependencies = [
  "serde",
  "tls_codec",
