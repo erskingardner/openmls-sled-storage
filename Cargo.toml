@@ -1,6 +1,6 @@
 [package]
 name = "openmls-sled-storage"
-authors = ["White Noise Authors"]
+authors = ["White Noise Authors <dev@whitenoise.chat>"]
 version = "0.1.0"
 edition = "2021"
 description = "A Sled storage backend for OpenMLS implementing openmls_traits."
