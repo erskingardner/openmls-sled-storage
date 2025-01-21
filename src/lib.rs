@@ -1,7 +1,6 @@
 pub mod helpers;
 pub mod traits;
 
-use crate::traits::TREES;
 use openmls_traits::storage::*;
 use sled::Db;
 use std::path::Path;
@@ -89,20 +88,20 @@ impl SledStorage {
     /// - There's an issue clearing any of the trees or the main database
     pub fn delete_all_data(&self) -> Result<(), SledStorageError> {
         let start = Instant::now();
-        log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleting all data");
-        for tree in TREES {
-            let tree_name_string = String::from_utf8(tree.to_vec()).unwrap();
-            log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleting tree: {:#?}", tree_name_string);
-            match tree_name_string.as_str() {
-                "__sled__default" => (),
-                _ => {
-                    self.db.drop_tree(tree)?;
-                }
-            }
+        tracing::debug!(target: "openmls_sled_storage::delete_all_data", "Deleting all data");
+
+        let trees = self.db.tree_names();
+        for tree in trees {
+            let tree_ref = self.db.open_tree(&tree)?;
+            tree_ref.clear()?;
+            drop(tree_ref); // Explicitly drop the reference
+            tracing::debug!(target: "openmls_sled_storage::delete_all_data", "Cleared tree: {:#?}", tree);
         }
+
         self.db.clear()?;
-        self.db.flush()?;
-        log::debug!(target: "openmls_sled_storage::delete_all_data", "Deleted all data in {:?}", start.elapsed());
+        self.flush()?;
+
+        tracing::debug!(target: "openmls_sled_storage::delete_all_data", "Deleted all data in {:?}", start.elapsed());
         Ok(())
     }
 
@@ -130,7 +129,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Writing to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Writing to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         // Serialize the value before storing
         let serialized_value =
@@ -165,7 +164,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Appending to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Appending to key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         let list_bytes = active_tree.get(key)?;
         let mut list: Vec<Vec<u8>> = Vec::new();
@@ -208,7 +207,7 @@ impl SledStorage {
     ) -> Result<Option<V>, <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Reading key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Reading key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         match active_tree.get(key) {
             Ok(None) => Ok(None),
@@ -243,7 +242,7 @@ impl SledStorage {
     ) -> Result<Vec<V>, <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Reading list from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Reading list from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         let value: Vec<Vec<u8>> = match active_tree.get(key) {
             Ok(Some(list_bytes)) => serde_json::from_slice(&list_bytes)?,
@@ -281,12 +280,12 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Removing item from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Removing item from key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
-        // fetch value from db, falling back to an empty list if doens't exist
+        // fetch value from db, if we don't have a list, we're done
         let list = match active_tree.get(key) {
             Ok(Some(list)) => list,
-            Ok(None) => Vec::new().into(),
+            Ok(None) => return Ok(()),
             Err(e) => return Err(SledStorageError::SledError(e)),
         };
 
@@ -331,7 +330,7 @@ impl SledStorage {
     ) -> Result<(), <Self as StorageProvider<CURRENT_VERSION>>::Error> {
         let active_tree = self.db.open_tree(tree)?;
 
-        log::debug!(target: "openmls-sled-storage", "Deleting key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
+        tracing::debug!(target: "openmls_sled_storage", "Deleting key: {:#?} in tree: {:#?}", hex::encode(key), hex::encode(tree));
 
         match active_tree.remove(key) {
             Ok(_res) => Ok(()),
@@ -354,7 +353,16 @@ mod tests {
 
     impl Entity<CURRENT_VERSION> for TestEntity {}
 
+    fn init_logging() {
+        // Only initialize if it hasn't been initialized already
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+    }
+
     fn setup_storage() -> SledStorage {
+        init_logging();
         let dir = tempdir().unwrap();
         SledStorage::new_from_path(dir.path()).unwrap()
     }
@@ -473,5 +481,110 @@ mod tests {
             storage.read::<CURRENT_VERSION, _>(tree, key);
         assert!(read_result.is_ok());
         assert_eq!(read_result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_delete_all_data() {
+        let storage = setup_storage();
+        let prefix = b"test_prefix";
+        let key = b"test_key";
+        let value = TestEntity {
+            data: "test_data".to_string(),
+        };
+
+        // Write some data
+        storage
+            .write::<CURRENT_VERSION>(prefix, key, serde_json::to_vec(&value).unwrap())
+            .unwrap();
+
+        // Delete all data
+        let delete_result = storage.delete_all_data();
+        assert!(delete_result.is_ok());
+
+        // Try to read the data back
+        let read_result: Result<Option<TestEntity>, _> =
+            storage.read::<CURRENT_VERSION, _>(prefix, key);
+        assert!(read_result.is_ok());
+        assert_eq!(read_result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_read_nonexistent_key() {
+        let storage = setup_storage();
+        let prefix = b"nonexistent_prefix";
+        let key = b"nonexistent_key";
+
+        let read_result: Result<Option<TestEntity>, _> =
+            storage.read::<CURRENT_VERSION, _>(prefix, key);
+        assert!(read_result.is_ok());
+        assert_eq!(read_result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_remove_from_empty_list() {
+        let storage = setup_storage();
+        let prefix = b"test_prefix";
+        let key = b"test_key";
+        let value = TestEntity {
+            data: "test_data".to_string(),
+        };
+
+        // Try to remove from non-existent list
+        let remove_result = storage.remove_item::<CURRENT_VERSION>(
+            prefix,
+            key,
+            serde_json::to_vec(&value).unwrap(),
+        );
+        assert!(remove_result.is_ok());
+    }
+
+    #[test]
+    fn test_read_empty_list() {
+        let storage = setup_storage();
+        let prefix = b"test_prefix";
+        let key = b"test_key";
+
+        let read_result: Result<Vec<TestEntity>, _> =
+            storage.read_list::<CURRENT_VERSION, _>(prefix, key);
+        assert!(read_result.is_ok());
+        assert!(read_result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_delete_all_data_thorough() {
+        let storage = setup_storage();
+        let trees = [b"tree1", b"tree2", b"tree3"];
+        let keys = [b"key1", b"key2"];
+        let value = TestEntity {
+            data: "test_data".to_string(),
+        };
+
+        // Write data to multiple trees and keys
+        for tree in &trees {
+            for key in &keys {
+                storage
+                    .write::<CURRENT_VERSION>(*tree, *key, serde_json::to_vec(&value).unwrap())
+                    .unwrap();
+            }
+        }
+
+        // Delete all data
+        let delete_result = storage.delete_all_data();
+        assert!(delete_result.is_ok());
+
+        // Verify all data is gone
+        for tree in &trees {
+            for key in &keys {
+                let read_result: Result<Option<TestEntity>, _> =
+                    storage.read::<CURRENT_VERSION, _>(*tree, *key);
+                assert!(read_result.is_ok());
+                assert_eq!(read_result.unwrap(), None);
+            }
+        }
+
+        // Verify trees are gone
+        for tree in &trees {
+            assert!(storage.db.open_tree(tree).unwrap().is_empty());
+        }
     }
 }
