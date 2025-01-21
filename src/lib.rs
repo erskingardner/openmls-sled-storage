@@ -484,31 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_all_data() {
-        let storage = setup_storage();
-        let prefix = b"test_prefix";
-        let key = b"test_key";
-        let value = TestEntity {
-            data: "test_data".to_string(),
-        };
-
-        // Write some data
-        storage
-            .write::<CURRENT_VERSION>(prefix, key, serde_json::to_vec(&value).unwrap())
-            .unwrap();
-
-        // Delete all data
-        let delete_result = storage.delete_all_data();
-        assert!(delete_result.is_ok());
-
-        // Try to read the data back
-        let read_result: Result<Option<TestEntity>, _> =
-            storage.read::<CURRENT_VERSION, _>(prefix, key);
-        assert!(read_result.is_ok());
-        assert_eq!(read_result.unwrap(), None);
-    }
-
-    #[test]
     fn test_read_nonexistent_key() {
         let storage = setup_storage();
         let prefix = b"nonexistent_prefix";
@@ -551,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_all_data_thorough() {
+    fn test_delete_all_data() {
         let storage = setup_storage();
         let trees = [b"tree1", b"tree2", b"tree3"];
         let keys = [b"key1", b"key2"];
